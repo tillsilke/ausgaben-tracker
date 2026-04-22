@@ -132,20 +132,7 @@ td{padding:9px 12px;vertical-align:middle;}
 </head>
 <body>
 
-<!-- AUTH MODAL -->
-<div class="overlay" id="auth-overlay">
-  <div class="modal">
-    <h2>☁️ Google Drive Sync</h2>
-    <p>Verbinde dein Google-Konto, damit alle Geräte und Personen dieselben Daten sehen. Daten werden in <strong>Ausgaben_Tracker_Data.json</strong> in deinem Drive gespeichert.</p>
-    <button class="google-btn" onclick="driveSignIn()">
-      <svg width="20" height="20" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
-      Mit Google anmelden &amp; Drive verbinden
-    </button>
-    <div class="modal-btns">
-      <button class="btn btn-secondary" onclick="skipDrive()">Nur lokal nutzen</button>
-    </div>
-  </div>
-</div>
+<!-- kein Auth Modal mehr nötig -->
 
 <!-- CONFIRM MODAL -->
 <div class="overlay hidden" id="confirm-overlay">
@@ -164,10 +151,9 @@ td{padding:9px 12px;vertical-align:middle;}
 <header class="app-header">
   <div class="app-logo">Ausgaben<span>.</span>Tracker</div>
   <div class="header-right">
-    <div class="sync-pill"><div class="sync-dot" id="sync-dot"></div><span id="sync-text">Offline</span></div>
-    <button class="btn-ghost" onclick="manualSync()" id="sync-btn" style="display:none">🔄 Sync</button>
+    <div class="sync-pill"><div class="sync-dot" id="sync-dot"></div><span id="sync-text">Verbinde…</span></div>
+    <button class="btn-ghost" onclick="manualSync()">🔄 Sync</button>
     <button class="btn-ghost" onclick="exportCSV()">⬇ CSV</button>
-    <button class="btn-ghost" onclick="showAuthOverlay()" id="drive-btn">☁ Drive</button>
   </div>
 </header>
 
@@ -263,8 +249,12 @@ td{padding:9px 12px;vertical-align:middle;}
       <div class="page-title">Einstellungen <small>Konten, Kategorien &amp; Drive</small></div>
 
       <div class="card">
-        <div class="card-header"><div class="card-title">☁️ Google Drive Sync</div></div>
-        <div class="card-body" id="drive-settings-body"></div>
+        <div class="card-header"><div class="card-title">☁️ Google Sheets Sync</div></div>
+        <div class="card-body">
+          <p style="color:var(--green);font-size:13px;margin-bottom:12px">✓ Verbunden – Daten werden automatisch synchronisiert</p>
+          <p style="font-size:12px;color:var(--text2);margin-bottom:12px">Alle Einträge werden in deinem Google Sheet gespeichert und sind für alle Geräte sofort sichtbar.</p>
+          <button class="btn btn-secondary" onclick="manualSync()">🔄 Jetzt synchronisieren</button>
+        </div>
       </div>
 
       <div class="card">
@@ -306,6 +296,9 @@ td{padding:9px 12px;vertical-align:middle;}
 </nav>
 
 <script>
+// ── GOOGLE SHEETS SCRIPT URL ─────────────────────────────────────────────────
+const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzLkZ0DenlVHeGEpfaKDk1i9O7JH2vEbf8BK0C_BDRo1EivNih9iG6olvPRS8d-5pmdnw/exec';
+
 // ── DEFAULT DATA ─────────────────────────────────────────────────────────────
 const DEFAULT_CATS = {
   "Haus – Kaufpreis & Nebenkosten":["Kaufpreis Immobilie","Grunderwerbsteuer","Notar- & Grundbuchkosten","Maklergebühren","Gutachten / Wertermittlung","Finanzierungskosten","Gebäudeversicherung Erstprämie","Sonstige Kaufnebenkosten"],
@@ -332,97 +325,63 @@ const COLORS = ["#1d4ed8","#2563eb","#059669","#d97706","#7c3aed","#dc2626","#08
 let S = { entries:[], konten:[...DEFAULT_KONTEN], cats:JSON.parse(JSON.stringify(DEFAULT_CATS)) };
 let editId = null;
 let pieInst = null;
-let driveToken = null;
-let driveFileId = null;
 let saveTimer = null;
+let lastSyncHash = '';
 
-// ── LOCAL STORAGE ─────────────────────────────────────────────────────────────
+// ── LOCAL STORAGE (offline cache) ────────────────────────────────────────────
 function persist(){ localStorage.setItem('at2_state', JSON.stringify(S)); }
 function loadLocal(){ try{ const d=localStorage.getItem('at2_state'); if(d) S=JSON.parse(d); }catch(e){} }
 
-// ── GOOGLE DRIVE ──────────────────────────────────────────────────────────────
-// !! Trage hier deine Google OAuth 2.0 Client-ID ein !!
-// Anleitung: console.cloud.google.com → neues Projekt → OAuth-Client-ID (Webanwendung)
-//            → autorisierte JS-Quelle: URL dieser HTML-Datei → Google Drive API aktivieren
-const GIS_CLIENT_ID = '282672312653-fc385od95k9nj80t2u1t84pskqkcan2f.apps.googleusercontent.com'; // <-- HIER EINTRAGEN: z.B. '123456789-abc.apps.googleusercontent.com'
-
-const FNAME = 'Ausgaben_Tracker_Data.json';
-
-function showAuthOverlay(){ document.getElementById('auth-overlay').classList.remove('hidden'); }
-function hideAuthOverlay(){ document.getElementById('auth-overlay').classList.add('hidden'); }
-
-function skipDrive(){
-  hideAuthOverlay();
-  localStorage.setItem('at2_skip','1');
-  setSS('','Nur lokal');
-  toast('Lokaler Modus – Daten nur auf diesem Gerät');
-}
-
-function driveSignIn(){
-  if(!GIS_CLIENT_ID){ hideAuthOverlay(); toast('⚠️ Bitte zuerst Client-ID in Einstellungen eintragen',4000); updateDriveUI(false); return; }
-  google.accounts.oauth2.initTokenClient({
-    client_id: GIS_CLIENT_ID,
-    scope:'https://www.googleapis.com/auth/drive.file',
-    callback: async(r)=>{
-      if(r.error){ setSS('err','Auth-Fehler'); return; }
-      driveToken=r.access_token;
-      localStorage.setItem('at2_tok', driveToken);
-      hideAuthOverlay();
-      setSS('busy','Verbinde…');
-      await driveInit();
+// ── GOOGLE SHEETS SYNC ───────────────────────────────────────────────────────
+async function sheetsLoad(){
+  setSS('busy','Lade…');
+  try {
+    const res = await fetch(SCRIPT_URL + '?action=load');
+    const json = await res.json();
+    if(json.data){
+      const remote = JSON.parse(json.data);
+      // merge: remote wins, but keep local cats/konten if remote has none
+      if(remote.entries !== undefined) S.entries = remote.entries;
+      if(remote.konten && remote.konten.length) S.konten = remote.konten;
+      if(remote.cats && Object.keys(remote.cats).length) S.cats = remote.cats;
+      persist();
     }
-  }).requestAccessToken();
+    setSS('ok','Synchronisiert ✓');
+    lastSyncHash = JSON.stringify(S);
+  } catch(e){
+    setSS('err','Keine Verbindung');
+    toast('⚠️ Offline – lokale Daten werden verwendet',3000);
+  }
 }
 
-async function driveInit(){
-  try{
-    const ls = await dFetch(`https://www.googleapis.com/drive/v3/files?q=name='${FNAME}'+and+trashed=false&fields=files(id)`);
-    if(ls.files && ls.files.length){ driveFileId=ls.files[0].id; await driveLoad(); }
-    else await driveCreate();
-    setSS('ok','Drive verbunden ✓');
-    document.getElementById('sync-btn').style.display='';
-    document.getElementById('drive-btn').textContent='☁ Verbunden';
-    updateDriveUI(true);
-    renderAll();
-    toast('☁️ Google Drive verbunden!');
-  }catch(e){ setSS('err','Drive-Fehler'); toast('Drive-Fehler: '+e.message,4000); }
-}
-
-async function driveLoad(){
-  const d = await dFetch(`https://www.googleapis.com/drive/v3/files/${driveFileId}?alt=media`);
-  if(d && d.entries!==undefined){ S=d; persist(); }
-}
-
-async function driveCreate(){
-  const body=new FormData();
-  body.append('metadata',new Blob([JSON.stringify({name:FNAME,mimeType:'application/json'})],{type:'application/json'}));
-  body.append('file',new Blob([JSON.stringify(S)],{type:'application/json'}));
-  const r=await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id',{method:'POST',headers:{'Authorization':'Bearer '+driveToken},body});
-  driveFileId=(await r.json()).id;
-}
-
-async function driveSave(){
-  if(!driveToken||!driveFileId){ persist(); return; }
-  setSS('busy','Speichert…');
-  try{
-    await fetch(`https://www.googleapis.com/upload/drive/v3/files/${driveFileId}?uploadType=media`,{
-      method:'PATCH',headers:{'Authorization':'Bearer '+driveToken,'Content-Type':'application/json'},body:JSON.stringify(S)
+async function sheetsSave(){
+  try {
+    setSS('busy','Speichert…');
+    await fetch(SCRIPT_URL, {
+      method:'POST',
+      body: JSON.stringify({ action:'save', data: JSON.stringify(S) })
     });
     setSS('ok','Gespeichert ✓');
+    lastSyncHash = JSON.stringify(S);
     persist();
-  }catch(e){ setSS('err','Sync-Fehler'); persist(); }
+  } catch(e){
+    setSS('err','Sync-Fehler');
+    persist();
+    toast('⚠️ Speichern fehlgeschlagen – lokal gesichert',3000);
+  }
 }
 
 async function manualSync(){
-  if(!driveToken||!driveFileId){ toast('Nicht mit Drive verbunden'); return; }
-  setSS('busy','Lade…');
-  try{ await driveLoad(); setSS('ok','Synchronisiert ✓'); renderAll(); toast('🔄 Daten aktualisiert'); }
-  catch(e){ setSS('err','Fehler'); }
+  await sheetsLoad();
+  renderAll();
+  toast('🔄 Daten aktualisiert');
 }
 
-async function dFetch(url){ const r=await fetch(url,{headers:{'Authorization':'Bearer '+driveToken}}); return r.json(); }
-
-function scheduleSave(){ persist(); if(saveTimer) clearTimeout(saveTimer); saveTimer=setTimeout(driveSave,1500); }
+function scheduleSave(){
+  persist();
+  if(saveTimer) clearTimeout(saveTimer);
+  saveTimer = setTimeout(sheetsSave, 1500);
+}
 
 function setSS(state,text){
   const d=document.getElementById('sync-dot');
@@ -430,37 +389,14 @@ function setSS(state,text){
   document.getElementById('sync-text').textContent=text;
 }
 
-function updateDriveUI(connected){
-  const el=document.getElementById('drive-settings-body');
-  if(connected){
-    el.innerHTML=`<p style="color:var(--green);font-size:13px;margin-bottom:12px">✓ Verbunden – Datei: <strong>${FNAME}</strong></p>
-    <div style="display:flex;gap:8px;flex-wrap:wrap">
-      <button class="btn btn-secondary" onclick="manualSync()">🔄 Jetzt synchronisieren</button>
-      <button class="btn btn-secondary" onclick="driveSignOut()">Abmelden</button>
-    </div>`;
-  } else {
-    el.innerHTML=`<div class="info-box"><strong>📋 Einrichtung (einmalig, ca. 5 Min.):</strong><br>
-      1. Öffne <a href="https://console.cloud.google.com" target="_blank" style="color:var(--blue)">console.cloud.google.com</a><br>
-      2. Neues Projekt erstellen<br>
-      3. <em>APIs &amp; Dienste → Google Drive API</em> aktivieren<br>
-      4. <em>OAuth 2.0-Client-ID</em> anlegen → Typ: <em>Webanwendung</em><br>
-      5. Unter „Autorisierte JavaScript-Quellen" die URL dieser Datei eintragen<br>
-      6. Client-ID kopieren und im Code bei <code>GIS_CLIENT_ID</code> eintragen<br>
-      7. Datei neu laden → „Drive verbinden" klicken
-    </div>
-    <button class="btn btn-primary" onclick="showAuthOverlay()">☁ Drive verbinden</button>`;
-  }
-}
+// auto-sync every 30 seconds so both users stay up to date
+setInterval(async()=>{
+  await sheetsLoad();
+  const newHash = JSON.stringify(S);
+  if(newHash !== lastSyncHash){ renderAll(); lastSyncHash=newHash; }
+}, 30000);
 
-function driveSignOut(){
-  driveToken=null; driveFileId=null;
-  localStorage.removeItem('at2_tok');
-  setSS('','Offline');
-  document.getElementById('sync-btn').style.display='none';
-  document.getElementById('drive-btn').textContent='☁ Drive';
-  updateDriveUI(false);
-  toast('Drive getrennt');
-}
+
 
 // ── NAVIGATION ────────────────────────────────────────────────────────────────
 function showView(id){
@@ -749,17 +685,14 @@ function exportCSV(){
 }
 
 // ── INIT ──────────────────────────────────────────────────────────────────────
-function init(){
+async function init(){
   loadLocal();
   document.getElementById('f-datum').value=new Date().toISOString().split('T')[0];
   renderAll();
-  const tok=localStorage.getItem('at2_tok');
-  if(tok){ driveToken=tok; if(GIS_CLIENT_ID){ setSS('busy','Verbinde…'); driveInit().catch(()=>{ setSS('err','Drive-Fehler'); driveToken=null; }); } else setSS('','Keine Client-ID'); }
-  else if(!localStorage.getItem('at2_skip')) showAuthOverlay();
-  else setSS('','Nur lokal');
+  await sheetsLoad();
+  renderAll();
 }
 init();
 </script>
-<script src="https://accounts.google.com/gsi/client" async defer></script>
 </body>
 </html>
